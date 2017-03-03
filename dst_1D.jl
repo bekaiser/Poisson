@@ -31,6 +31,13 @@ function dealias(U,V,k)
 	return uv
 end
 
+function poisson(q,k)
+	# 1D DST spectral inversion using FFTW to solve the Poisson equation:
+	# given q and the Poisson equation, Laplacian(psi)=q, solve for psi.
+	psi = r2r(-r2r(q,FFTW.RODFT10)./(2.0*length(q).*k.^(2.0)),FFTW.RODFT01);
+	return psi 
+end
+
 
 # =============================================================================
 # domain
@@ -221,3 +228,24 @@ semilogx(hs,2.0/float(N)*abs(U2_dealias),"b",label="de-aliased"); ylabel("|U^2|"
 xlabel("spatial frequency (1/km)"); legend(loc=2); title("u_1*u_2");
 #axis([pi/(4.0*Lx),float(N)*pi/(5.0*Lx),0.0,0.05]);
 savefig("./figures/aliasing_spectrums.png",format="png"); close(fig);
+
+
+# =============================================================================
+# Poisson equation solution by dst
+
+# Poisson equation solution: Laplacian(psi) = qA
+uP = poisson(d2udx2A,ks); 
+Poisson_error = abs(uP-u); # Poisson equation solution error
+max_err = maximum(Poisson_error);
+
+fig = figure(); plot(x./L,u,"k",label="signal"); 
+plot(x./L,uP,"b",label="Poisson solution"); legend();
+xlabel("x"); ylabel("u"); title("Laplacian(psi) = q, psi solution"); 
+savefig("./figures/Poisson_solution.png",format="png"); close(fig);
+
+fig = figure(); CP = plot(x./L,Poisson_error,"k")
+xlabel("x"); ylabel("error"); title("Laplacian(psi) = q, psi solution error"); 
+savefig("./figures/Poisson_solution_error.png",format="png"); close(fig);
+
+println("The maximum Poisson equation computation error is $(max_err) for $N gridpoints.\n")
+
