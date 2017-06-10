@@ -1,86 +1,99 @@
-# Derivatives, spectral anti-derivatives, and de-aliasing by discrete cosine 
+# Derivatives, spectral anti-derivatives, and de-aliasing by discrete sine 
 # transforms in 1D. 
 # Bryan Kaiser 
-# 3/10/17
+# 4/8/17
 
 using DataArrays
 using PyPlot
 using PyCall
 using Base.FFTW
 
+# add derivative function
+# add way to deal with mean
 
 # =============================================================================
 # readme:
 
 # This script shows how to take 1D derivatives, do 1D spectral inversions, 
-# and how to de-alias nonlinear signals using FFTW DCTs. 
+# and how to de-alias nonlinear signals using FFTW DSTs. 
 
 # Make sure that you create the directory "/figures" in the same directory as 
 # as this script, for output plots.
 
-
 # =============================================================================
 # functions
 
-function dealias(U,V,kc)
-	# dct de-aliasing
-	for j = 1:length(kc)
-		if abs(kc[j]) >= length(U)/3.0*kc[2]; # 2/3 rule
+function dealias(U,V,ks)
+	# dst de-aliasing
+	for j = 1:length(ks)
+		if abs(ks[j]) >= length(U)/3.0*ks[1]; # 2/3 rule
 			U[j] = 0.0; V[j] = 0.0; # Fourier space variables
 		end
 	end
-	uv = r2r(U,FFTW.REDFT01).*r2r(V,FFTW.REDFT01); # de-aliased product
+	uv = r2r(U,FFTW.RODFT01).*r2r(V,FFTW.RODFT01); # de-aliased product
 	return uv
 end
 
-function poisson(q,kcinv)
+function poisson(q,k)
 	# 1D DST spectral inversion using FFTW to solve the Poisson equation:
 	# given q and the Poisson equation, Laplacian(psi)=q, solve for psi.
-	psi = r2r(-r2r(q,FFTW.REDFT10)./(2.0*length(q).*kcinv.^(2.0)),FFTW.REDFT01);
-	return psi
+	psi = r2r(-r2r(q,FFTW.RODFT10)./(2.0*length(q).*k.^(2.0)),FFTW.RODFT01);
+	return psi 
 end
 
-function dct_d1(Ucos,ks) 
-	# cosine shift (pi/2) for 1st derivative, then DST-III (inverse dst)
-	dudx = r2r(-[Ucos[2:length(Ucos)];0.0].*ks,FFTW.RODFT01);
-	return dudx
-end
-
-function dct_d2(Ucos,kc) 
-	d2udx2 = r2r(-Ucos.*kc.^2.0,FFTW.REDFT01) # DCT-III;
-	return d2udx2
+function bandavg(U::Array{Float64,1},nb::Int64)
+	# nb = number of bands to average over (window size)
+	# U = spectral variable to be band-averaged, low to high frequency.
+	N = length(U);
+	Nb = Int64(floor(N/nb)); Ub = zeros(Nb);
+	r = Int64(N-Nb*nb); # remainder 
+	#println("$Nb,$N,$r,$(length(collect(1:Nb)))")
+	for j = 1:Nb
+		#println("$(length(collect((r+1+(j-1)*nb):(r+j*nb))))")
+		Ub[j] = sum(U[(r+1+(j-1)*nb):(r+j*nb)])/Float64(nb);
+	end
+	return Ub
 end
 
 # =============================================================================
 # domain
  
-L = 3000.0 # length, domain size
+L = 3000.0 # km, domain size
 Lcenter = 0.0 # x value @ the center of the grid
 N = 2^8 # series length (must be at least even)
-dx = L/Float64(N) # length, uniform longitudinal grid spacing
-x = collect(0.5*dx:dx:dx*Float64(N))-(L/2.0-Lcenter) # length, centered uniform grid
+dx = L/Float64(N) # km, uniform longitudinal grid spacing
+x = collect(0.5*dx:dx:dx*Float64(N))-(L/2.0-Lcenter) # km, centered uniform grid 
 
 
 # =============================================================================
 # test signals
 
-ifield = 1
+ifield = 2
 
-if ifield == 1 # cos(kx), machine precision for DCT
-A = 3.0; lambda = L/2.0; ks = 2.0*pi/lambda; # rad/length
-u = A*cos(ks*x); dudxA = -A*ks*sin(ks*x); d2udx2A = -A*ks^2.0*cos(ks*x); 
-elseif ifield == 2 # sin(kx), difficult for DCT
+if ifield == 1 # cos(kx), problematic for a sine transform to resolve
 A = 3.0 # m/s, velocity signal amplitude
 lambda = L/10.0 # km, wavelength of signal (smallest possible)
+ks = 2.0*pi/lambda # rad/km
+u = A*cos(ks*x) # km/s (not physical...)
+dudxA = -A*ks*sin(ks*x) 
+d2udx2A = -A*ks^2.0*cos(ks*x) 
+elseif ifield == 2 # sin(kx), machine precision even derivatives
+A = 3.0 # m/s, velocity signal amplitude
+lambda = L/2.0 # km, wavelength of signal (smallest possible)
 ks = 2.0*pi/lambda # rad/km
 u = A*sin(ks*x) # km/s
 dudxA = A*ks*cos(ks*x) 
 d2udx2A = -A*ks^2.0*sin(ks*x)
 elseif ifield == 3 # Gaussian(x)
 sigma = L/20.0
-u = exp(-(x-Lcenter).^2.0/(2.0*sigma^2.0)) # test signal equivalent to gaussmf(x,[L/10 0]);
-dudxA = (x-Lcenter).*u.*(-sigma^(-2.0)) # test signal derivative (Gaussian)
-d2udx2A = u.*((x-Lcenter).^2.0-sigma^2.0)./sigma^4.0
+X = x-Lxcenter
+u = exp(-X.^2.0/(2.0*sigma^2.0)) # test signal equivalent to gaussmf(x,[L/10 0]);
+dudxA = X.*u.*(-sigma^(-2.0)) # test signal derivative (Gaussian)
+d2udx2A = u.*(X.^2.0-sigma^2.0)./sigma^4.0;
+elseif ifield == 4
+m = 2.0; b = L; u = x.*m+b;
+dudxA = ones(size(x)).*m;
+d2udx2A = zeros(size(x));
 end
  
 # signal plot 
@@ -95,55 +108,57 @@ savefig("./figures/signal.png",format="png"); close(fig);
 Ucos = r2r(u,FFTW.REDFT10)./(2.0*Float64(N)); # DCT-II 
 Usin = r2r(u,FFTW.RODFT10)./(2.0*Float64(N)); # DST-II 
 
+#PUsin = plan_r2r(flags=FFTW.MEASURE,u,FFTW.RODFT10)./(2.0*Float64(N))
+#UsinP = PUsin*u;
+
 # wavenumbers 
 kc = collect(0:Int64(N)-1).*(pi/L); # for DCT-II
 ks = collect(1:Int64(N)).*(pi/L); # for DST-II
-hc = kc./pi; # 1/length
-kcinv = copy(kc); kcinv[1] = Inf;
+
+hs = ks./pi; # 1/length, equivalent to Hz for time
 
 # comparison of transforms
 fig = figure(); plot(kc,Ucos,"r",label="DCT-II"); 
 plot(ks,Usin,"b",label="DST-II");
-xlabel("k (rads/m)"); title("transforms"); legend();
+xlabel("k (rads/length)"); title("transforms"); legend();
 savefig("./figures/spectral_dst_dct.png",format="png"); close(fig);
 
 
 # =============================================================================
-# inverse discrete cosine transform
+# inverse discrete sine transform
 
-uinv = r2r(Ucos,FFTW.REDFT01); # inverse dst
+uinv = r2r(Usin,FFTW.RODFT01); # DST-III (IDST)
 
 # comparison of time series and reconstructed time series 
 fig = figure(); plot(x./L,u,"k",label="signal");
-plot(x./L,uinv,"b",label="DCT => IDCT");
-xlabel("x"); title("discrete cosine transform"); legend();
-savefig("./figures/reconstructed_signal.png",format="png"); close(fig);
+plot(x./L,uinv,"b",label="IDST");
+xlabel("x"); title("DST-III (IDST) of DST-II transform"); legend();
+savefig("./figures/reconstructed_time_series.png",format="png"); close(fig);
 
 # DST => IDST error plot
 fig = figure(); CP = semilogy(x./L,abs(u-real(uinv)),"k");
-xlabel("x"); title("discrete cosine transform error");
-savefig("./figures/reconstructed_signal_error.png",format="png"); close(fig);
+xlabel("x"); title("DST-III (IDST) of DST-II transform, error");
+savefig("./figures/reconstructed_time_series_error.png",format="png"); close(fig);
 
 
 # =============================================================================
 # first derivative
 
-Ushift = [Ucos[2:Int64(N)];0.0]; # cosine shift (pi/2) for 1st derivative
+Ushift = [0.0;Usin[1:Int64(N)-1]]; # sine shift (pi/2) for 1st derivative
 
 # plot of transformed derivative
-fig = figure(); plot(kc,Ucos,"k",label="cosine transformed signal");
-plot(ks,-Ushift,"b",label="transformed derivative");
+fig = figure(); plot(ks,Usin,"k",label="sine transformed signal");
+plot(kc,-Ushift,"b",label="transformed derivative");
 xlabel("k (rads/length)"); title("du/dx transform"); legend();
 savefig("./figures/spectral_first_derivative.png",format="png"); close(fig);
 
 # signal derivative via cosine transform 
-#dudx = r2r(-Ushift.*ks,FFTW.RODFT01) # DST-III (inverse dst) 
-dudx = dct_d1(Ucos,ks);
+dudx = r2r(Ushift.*kc,FFTW.REDFT01); # DCT-III (IDCT) 
 
 # comparison of analytical du/dx and computed du/dx plot
-fig = figure(); plot(x./L,dudxA,"k",label="signal");
-plot(x./L,dudx,"b--",label="IDST"); xlabel("x"); 
-title("du/dx by DST-III (IDST) of shifted DCT-II"); legend();
+fig = figure(); plot(x./L,dudxA,"r",label="signal");
+plot(x./L,dudx,"b--",label="IDCT"); xlabel("x"); 
+title("du/dx by DCT-III (IDCT) of shifted DST-II"); legend();
 savefig("./figures/first_derivative.png",format="png"); close(fig);
 
 deriv_error = abs(dudxA-dudx); max_deriv_error = maximum(abs(dudxA-dudx));
@@ -151,33 +166,33 @@ println("\nThe maximum first derivative error is $(max_deriv_error) for $N grid 
 
 # first derivative error plot
 fig = figure(); CP = semilogy(x./L,deriv_error,"k");
-xlabel("x"); title("du/dx by DST-III (IDST) of shifted DCT-II, error");
+xlabel("x"); title("du/dx by DCT-III (IDCT) of shifted DST-II, error");
 savefig("./figures/first_derivative_error.png",format="png"); close(fig);
 
 
 # =============================================================================
 # second derivative
 
-d2udx2 = dct_d2(Ucos,kc);
+d2udx2 = r2r(-Usin.*ks.^2.0,FFTW.RODFT01); # DST-III
 
 # plot of transformed derivative
-fig = figure(); plot(kc,Ucos,"k",label="cosine transformed signal");
-plot(kc,-Ucos.*kc.^2.0,"b",label="transformed derivative"); 
+fig = figure(); plot(ks,Usin,"k",label="sine transformed signal");
+plot(ks,-Usin.*ks.^2.0,"b",label="transformed derivative"); 
 xlabel("k (rads/length)"); title("d^2u/dx^2 transform"); legend();
 savefig("./figures/spectral_second_derivative.png",format="png"); close(fig);
 
 # comparison with analytical d^2u/dx^2
 fig = figure(); plot(x./L,d2udx2A,"k",label="signal");
-plot(x./L,d2udx2,"b",label="IDCT"); 
-xlabel("x"); title("d^2u/dx^2 by DCT-III (IDCT) of DCT-II"); legend();
+plot(x./L,d2udx2,"b",label="IDST"); 
+xlabel("x"); title("d^2u/dx^2 by DST-III (IDST) of DST-II"); legend();
 savefig("./figures/second_derivative.png",format="png"); close(fig);
 
 deriv2_error = abs(d2udx2A-d2udx2); max_deriv2_error = maximum(abs(d2udx2A-d2udx2));
 println("The maximum second derivative error is $(max_deriv2_error) for $N grid points\n");
 
 # error plot
-fig = figure(); semilogy(x./L,abs(d2udx2A-d2udx2),"k");
-xlabel("x"); title("d^2u/dx^2 by DCT-III (IDCT) of DCT-II, error");
+fig = figure(); semilogy(x,deriv2_error,"k");
+xlabel("x"); title("d^2u/dx^2 by DST-III (IDST) of DST-II, error");
 savefig("./figures/second_derivative_error.png",format="png"); close(fig);
 
 
@@ -196,25 +211,33 @@ ka = Float64(N)/100.0*(2.0*pi/L);
 ua = sin(x.*ka); ub = u1;
 end
 
-Ua = r2r(ua,FFTW.REDFT10)./(2.0*Float64(N)); # DCT-II 
-Ub = r2r(ub,FFTW.REDFT10)./(2.0*Float64(N)); # DCT-II 
+Ua = r2r(ua,FFTW.RODFT10)./(2.0*Float64(N)); # DST-II 
+Ub = r2r(ub,FFTW.RODFT10)./(2.0*Float64(N)); # DST-II 
 
 # random signal plot 
 fig = figure(); plot(x./L,ua,"r",label="u_1");
 plot(x./L,ub,"b",label="u_2");
-xlabel("x (km)"); legend(); title("random signals");
+xlabel("x"); legend(); title("random signals");
 savefig("./figures/random_signals.png",format="png"); close(fig);
 
+# band-averaging
+Nb = 4; hsb = bandavg(hs,Nb); 
+Uab = bandavg(Ua,Nb); Ubb = bandavg(Ub,Nb);
+
 # single-sided spectrum plot
-fig = figure(); semilogx(hc,2.0/Float64(N)*abs(Ua),"r",label="u_1");
-semilogx(hc,2.0/Float64(N)*abs(Ub),"b",label="u_2"); ylabel("|U|");
+fig = figure(); 
+semilogx(hs,2.0/Float64(N)*abs(Ua),"r",label="u_1");
+semilogx(hs,2.0/Float64(N)*abs(Ub),"b",label="u_2"); 
+semilogx(hsb,2.0/Float64(N)*abs(Uab),"r--",label="u_1 band");
+semilogx(hsb,2.0/Float64(N)*abs(Ubb),"b--",label="u_2 band");
+ylabel("|U|");
 xlabel("spatial frequency (1/length)"); legend(loc=2); title("Single sided spectrum");
 savefig("./figures/single_sided_white_spectrums.png",format="png"); close(fig);
 
 u2_alias = ua.*ub; # aliased square
-u2_dealias = dealias(Ua,Ub,kc); # de-aliased square
-U2_alias = r2r(u2_alias,FFTW.REDFT10)./(2.0*Float64(N)); # DCT-II 
-U2_dealias = r2r(u2_dealias,FFTW.REDFT10)./(2.0*Float64(N)); # DCT-II 
+u2_dealias = dealias(Ua,Ub,ks); # de-aliased square
+U2_alias = r2r(u2_alias,FFTW.RODFT10)./(2.0*Float64(N)); # DST-II 
+U2_dealias = r2r(u2_dealias,FFTW.RODFT10)./(2.0*Float64(N)); # DST-II 
 
 # alias vs. de-aliased physical plot 
 fig = figure(); plot(x./L,u2_alias,"r",label="aliased");
@@ -223,18 +246,18 @@ xlabel("x"); legend(); title("u_1*u_2");
 savefig("./figures/aliased_signals.png",format="png"); close(fig);
 
 # single-sided spectrum plot
-fig = figure(); semilogx(hc,2.0/Float64(N)*abs(U2_alias),"r",label="aliased");
-semilogx(hc,2.0/Float64(N)*abs(U2_dealias),"b",label="de-aliased"); ylabel("|U^2|");
+fig = figure(); semilogx(hs,2.0/float(N)*abs(U2_alias),"r",label="aliased");
+semilogx(hs,2.0/float(N)*abs(U2_dealias),"b",label="de-aliased"); ylabel("|U^2|");
 xlabel("spatial frequency (1/length)"); legend(loc=2); title("u_1*u_2");
 #axis([pi/(4.0*Lx),float(N)*pi/(5.0*Lx),0.0,0.05]);
 savefig("./figures/aliasing_spectrums.png",format="png"); close(fig);
 
 
 # =============================================================================
-# Poisson equation solution by dct
+# Poisson equation solution by dst
 
 # Poisson equation solution: Laplacian(psi) = qA
-uP = poisson(d2udx2A,kcinv); 
+uP = poisson(d2udx2A,ks); 
 Poisson_error = abs(uP-u); # Poisson equation solution error
 max_err = maximum(Poisson_error);
 
@@ -243,10 +266,125 @@ plot(x./L,uP,"b",label="Poisson solution"); legend();
 xlabel("x"); ylabel("u"); title("Laplacian(psi) = q, psi solution"); 
 savefig("./figures/Poisson_solution.png",format="png"); close(fig);
 
-fig = figure(); CP = semilogy(x./L,Poisson_error,"k")
+fig = figure(); CP = plot(x./L,Poisson_error,"k")
 xlabel("x"); ylabel("error"); title("Laplacian(psi) = q, psi solution error"); 
 savefig("./figures/Poisson_solution_error.png",format="png"); close(fig);
 
 println("The maximum Poisson equation computation error is $(max_err) for $N gridpoints.\n")
 
 
+# =============================================================================
+# fftw plan
+
+n = collect(3:23); # typeof(n) = Array{Int64,1}, powers of 2 grid resolution
+
+# initialized fields
+dst_time = zeros(length(n)); dst_plan_time = zeros(length(n));
+Linf_d1 = zeros(length(n)); Linf_d2 = zeros(length(n));
+Linf_d1P = zeros(length(n)); Linf_d2P = zeros(length(n));
+
+for m = 1:length(n) # loop over powers of 2 grid resolution 
+
+# domain
+L = 3000.0 # km, domain size
+Lcenter = 0.0 # x value @ the center of the grid
+N = 2^n[m] # series length (must be at least even)
+dx = L/Float64(N) # km, uniform longitudinal grid spacing
+x = collect(0.5*dx:dx:dx*Float64(N))-(L/2.0-Lcenter) # km, centered uniform grid 
+
+# signal
+if ifield == 1 # cos(kx), problematic for a sine transform to resolve
+A = 3.0 # m/s, velocity signal amplitude
+lambda = L/10.0 # km, wavelength of signal (smallest possible)
+ks = 2.0*pi/lambda # rad/km
+u = A*cos(ks*x) # km/s (not physical...)
+dudxA = -A*ks*sin(ks*x) 
+d2udx2A = -A*ks^2.0*cos(ks*x) 
+elseif ifield == 2 # sin(kx), machine precision even derivatives
+A = 3.0 # m/s, velocity signal amplitude
+lambda = L/2.0 # km, wavelength of signal (smallest possible)
+ks = 2.0*pi/lambda # rad/km
+u = A*sin(ks*x) # km/s
+dudxA = A*ks*cos(ks*x) 
+d2udx2A = -A*ks^2.0*sin(ks*x)
+elseif ifield == 3 # Gaussian(x)
+sigma = L/20.0
+X = x-Lxcenter
+u = exp(-X.^2.0/(2.0*sigma^2.0)) # test signal equivalent to gaussmf(x,[L/10 0]);
+dudxA = X.*u.*(-sigma^(-2.0)) # test signal derivative (Gaussian)
+d2udx2A = u.*(X.^2.0-sigma^2.0)./sigma^4.0;
+elseif ifield == 4
+m = 2.0; b = L; u = x.*m+b;
+dudxA = ones(size(x)).*m;
+d2udx2A = zeros(size(x));
+end
+
+# wavenumbers 
+kc = collect(0:Int32(N)-1).*(pi/L); # for DCT-II
+ks = collect(1:Int32(N)).*(pi/L); # for DST-II
+
+# initialize spectral u, derivatives
+Usin = similar(x); Ushift = similar(x); dudx = similar(x); d2udx2 = similar(x);
+UsinP = similar(x); UshiftP = similar(x); dudxP = similar(x); d2udx2P = similar(x);
+
+tic(); for m1 = 1:100;
+#Ucos = r2r(u,FFTW.REDFT10)./(2.0*Float64(N)); # DCT-II 
+Usin = r2r(u,FFTW.RODFT10)./(2.0*Float64(N)); # DST-II 
+Ushift = [0.0;Usin[1:Int64(N)-1]]; # sine shift (pi/2) for 1st derivative
+dudx = r2r(Ushift.*kc,FFTW.REDFT01); # DCT-III (IDCT) 
+d2udx2 = r2r(-Usin.*ks.^2.0,FFTW.RODFT01); # DST-III
+end; dst_time[m] = toq();
+
+# multithread number of threads and fft_plan:
+FFTW.set_num_threads(4)
+PUcos = plan_r2r(u,FFTW.REDFT10,flags=FFTW.MEASURE);
+PUsin = plan_r2r(u,FFTW.RODFT10,flags=FFTW.MEASURE); 
+#UcosP = (PUcos*u)./(2.0*Float64(N)); 
+UsinP = (PUsin*u)./(2.0*Float64(N)); 
+UshiftP = [0.0;UsinP[1:Int64(N)-1]]; # sine shift (pi/2) for 1st derivative
+Pdudx = plan_r2r(UshiftP.*kc,FFTW.REDFT01,flags=FFTW.MEASURE);
+Pd2udx2 = plan_r2r(-UsinP.*ks.^2.0,FFTW.RODFT01,flags=FFTW.MEASURE)
+dudxP = Pdudx*(UshiftP.*kc); 
+d2udx2P = Pd2udx2*(-Usin.*ks.^2.0); 
+
+tic(); for m2 = 1:100; 
+#UcosP = (PUcos*u)./(2.0*Float64(N)); 
+UsinP = (PUsin*u)./(2.0*Float64(N)); 
+UshiftP = [0.0;UsinP[1:Int64(N)-1]]; # sine shift (pi/2) for 1st derivative
+dudxP = Pdudx*(UshiftP.*kc); 
+d2udx2P = Pd2udx2*(-UsinP.*ks.^2.0); 
+end; dst_plan_time[m] = toq();
+
+# infinity norm error for fft and fft plan 
+Linf_d1[m] = maximum(abs(dudxA-dudx));
+Linf_d2[m] = maximum(abs(d2udx2A-d2udx2));
+Linf_d1P[m] = maximum(abs(dudxA-dudxP));
+Linf_d2P[m] = maximum(abs(d2udx2A-d2udx2P));
+
+#=
+deriv_error = abs(dudxA-dudx); max_deriv_error = maximum(abs(dudxP-dudx));
+println("The maximum plan fftw first derivative error is $(max_deriv_error) for $N grid points\n");
+deriv2_error = abs(d2udx2A-d2udx2); max_deriv2_error = maximum(abs(d2udx2P-d2udx2));
+println("The maximum second derivative error is $(max_deriv2_error) for $N grid points\n");
+=#
+
+end
+
+Nvec = (ones(size(n)).*2.0).^n;
+NlogN = (log2(Nvec).*Nvec).*(dst_time[1]/(log2(Nvec[1]).*Nvec[1]));
+
+# wall time plot
+fig = figure(); 
+loglog(Nvec,NlogN,"k--",label="Nlog2(N)");
+loglog(Nvec,dst_time,"k",label="dst"); 
+loglog(Nvec,dst_plan_time,"r--",label="plan_dst"); legend(loc=2);
+xlabel("N"); ylabel("seconds"); title("wall time, 1000 dsts"); 
+savefig("./figures/dst_plan_computation_time.png",format="png"); close(fig);
+
+# error plot
+fig = figure(); loglog(Nvec,Linf_d1,"b--",label="dx, dst"); 
+loglog(Nvec,Linf_d2,"b",label="dx2, dst"); 
+loglog(Nvec,Linf_d1P,"r.",label="dx, dst plan"); 
+loglog(Nvec,Linf_d2P,"r--",label="dx2, dst plan"); legend(loc=4);
+xlabel("N"); ylabel("L infinity"); title("error"); 
+savefig("./figures/dst_plan_error.png",format="png"); close(fig);
